@@ -20,9 +20,9 @@ function bigint_extra.random_raw(low, high)
     -- Type checking done by bigint.compare
     local range, result
 
-    assert(bigint.compare(low, high, "<"), bigint.unserialize(low)
+    assert(bigint.compare(low, high, "<"), bigint.unserialize(low, "s")
                                             .. " is not less than "
-                                            .. bigint.unserialize(high))
+                                            .. bigint.unserialize(high, "s"))
     range = bigint.add(bigint.subtract(high, low), one)
 
     x = bigint.modulus(bigint.multiply(x, x), m)
