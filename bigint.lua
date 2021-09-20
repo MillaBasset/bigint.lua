@@ -8,6 +8,42 @@ local strict = true
 
 local bigint = {}
 
+local mt = {
+    __add = function(lhs, rhs)
+        return bigint.add(lhs, rhs)
+    end,
+    __unm = function(arg)
+        return bigint.negate(arg)
+    end,
+    __sub = function(lhs, rhs)
+        return bigint.subtract(lhs, rhs)
+    end,
+    __mul = function(lhs, rhs)
+        return bigint.multiply(lhs, rhs)
+    end,
+    __div = function(lhs, rhs)
+        return bigint.divide(lhs, rhs)
+    end,
+    __mod = function(lhs, rhs)
+        return bigint.modulus(lhs, rhs)
+    end,
+    __pow = function(lhs, rhs)
+        return bigint.exponentiate(lhs, rhs)
+    end,
+    __tostring = function(arg)
+        return bigint.unserialize(arg, "s")
+    end,
+    __eq = function(lhs, rhs)
+        return bigint.compare(lhs, rhs, "==")
+    end,
+    __lt = function(lhs, rhs)
+        return bigint.compare(lhs, rhs, "<")
+    end,
+    __le = function(lhs, rhs)
+        return bigint.compare(lhs, rhs, "<=")
+    end
+}
+
 local named_powers = require("named-powers-of-ten")
 
 -- Create a new bigint or convert a number or string into a big
@@ -28,34 +64,7 @@ function bigint.new(num)
         return newint
     end
 
-    setmetatable(self, {
-        __add = function(lhs, rhs)
-            return bigint.add(lhs, rhs)
-        end,
-        __unm = function()
-            if (self.sign == "+") then
-                self.sign = "-"
-            else
-                self.sign = "+"
-            end
-            return self
-        end,
-        __sub = function(lhs, rhs)
-            return bigint.subtract(lhs, rhs)
-        end,
-        __mul = function(lhs, rhs)
-            return bigint.multiply(lhs, rhs)
-        end,
-        __div = function(lhs, rhs)
-            return bigint.divide(lhs, rhs)
-        end,
-        __mod = function(lhs, rhs)
-            return bigint.modulus(lhs, rhs)
-        end,
-        __pow = function(lhs, rhs)
-            return bigint.exponentiate(lhs, rhs)
-        end
-    })
+    setmetatable(self, mt)
 
     if (num) then
         local num_string = tostring(num)
@@ -75,11 +84,13 @@ end
 -- forced by supplying "true" as the second argument.
 function bigint.check(big, force)
     if (strict or force) then
+        assert(getmetatable(big) == mt, "at least one arg is not a bigint")
         assert(#big.digits > 0, "bigint is empty")
-        assert(type(big.sign) == "string", "bigint is unsigned")
+        assert(big.sign == "+" or big.sign == "-", "bigint is unsigned")
         for _, digit in pairs(big.digits) do
-            assert(type(digit) == "number", digit .. " is not a number")
-            assert(digit < 10, digit .. " is greater than or equal to 10")
+            assert(type(digit) == "number", "at least one digit is invalid")
+            assert(digit <= 9 and digit >= 0, digit .. " is not between 0 and 9")
+            assert(math.floor(digit) == digit, digit .. " is not an integer")
         end
     end
     return true
@@ -92,6 +103,24 @@ function bigint.abs(big)
     local result = big:clone()
     result.sign = "+"
     return result
+end
+
+-- Return a new big with the same digits but the opposite sign (negation)
+function bigint.negate(big)
+    bigint.check(big)
+    local result = big:clone()
+    if (result.sign == "+") then
+        result.sign = "-"
+    else
+        result.sign = "+"
+    end
+    return result
+end
+
+-- Return the number of digits in the big
+function bigint.digits(big)
+    bigint.check(big)
+    return #big.digits
 end
 
 -- Convert a big to a number or string
@@ -128,7 +157,7 @@ function bigint.unserialize(big, output_type, precision)
         -- Unserialization to human-readable form or scientific notation only
         -- requires reading the first few digits
         if (precision == nil) then
-            precision = 3
+            precision = math.min(#big.digits, 3)
         else
             assert(precision > 0, "Precision cannot be less than 1")
             assert(math.floor(precision) == precision,
@@ -137,17 +166,18 @@ function bigint.unserialize(big, output_type, precision)
 
         -- num is the first (precision + 1) digits, the first being separated by
         -- a decimal point from the others
-        num = num .. big.digits[1]
+        num = num .. math.floor(big.digits[1])
         if (precision > 1) then
             num = num .. "."
             for i = 1, (precision - 1) do
-                num = num .. big.digits[i + 1]
+                num = num .. math.floor(big.digits[i + 1])
             end
         end
 
         if ((output_type == "human-readable")
         or (output_type == "human")
-        or (output_type == "h")) then
+        or (output_type == "h"))
+        and (#big.digits >= 3 and #big.digits <= 10002) then
             -- Human-readable output contributed by 123eee555
 
             local name
@@ -426,24 +456,33 @@ function bigint.multiply(big1, big2)
     return result
 end
 
-
 -- Raise a big to a positive integer or big power (TODO: negative integer power)
 function bigint.exponentiate(big, power)
     -- Type checking for big done by bigint.multiply
-    assert(bigint.compare(power, bigint.new(0), ">"),
+    assert(bigint.compare(power, bigint.new(0), ">="),
            " negative powers are not supported")
     local exp = power:clone()
 
     if (bigint.compare(exp, bigint.new(0), "==")) then
         return bigint.new(1)
     elseif (bigint.compare(exp, bigint.new(1), "==")) then
-        return big
+        return big:clone()
     else
-        local result = big:clone()
+        local result = bigint.new(1)
+        local base = big:clone()
 
-        while (bigint.compare(exp, bigint.new(1), ">")) do
-            result = bigint.multiply(result, big)
-            exp = bigint.subtract(exp, bigint.new(1))
+        while (true) do
+            if (bigint.compare(
+                bigint.modulus(exp, bigint.new(2)), bigint.new(1), "=="
+            )) then
+                result = bigint.multiply(result, base)
+            end
+            if (bigint.compare(exp, bigint.new(1), "==")) then
+                break
+            else
+                exp = bigint.divide(exp, bigint.new(2))
+                base = bigint.multiply(base, base)
+            end
         end
 
         return result
@@ -459,7 +498,7 @@ function bigint.divide_raw(big1, big2)
     if (bigint.compare(big1, big2, "==")) then
         return bigint.new(1), bigint.new(0)
     elseif (bigint.compare(big1, big2, "<")) then
-        return bigint.new(0), bigint.new(0)
+        return bigint.new(0), big1:clone()
     else
         assert(bigint.compare(big2, bigint.new(0), "!="), "error: divide by zero")
         assert(big1.sign == "+", "error: big1 is not positive")
@@ -467,54 +506,35 @@ function bigint.divide_raw(big1, big2)
 
         local result = bigint.new()
 
-        local dividend = bigint.new() -- Dividend of a single operation, not the
-                                      -- dividend of the overall function
-        local divisor = big2:clone()
-        local factor = 1
+        local dividend = bigint.new() -- Dividend of a single operation
 
-        -- Walk left to right among digits in the dividend, like in long
-        -- division
-        for _, digit in pairs(big1.digits) do
-            dividend.digits[#dividend.digits + 1] = digit
+        local neg_zero = bigint.new(0)
+        neg_zero.sign = "-"
 
-            -- The dividend is smaller than the divisor, so a zero is appended
-            -- to the result and the loop ends
-            if (bigint.compare(dividend, divisor, "<")) then
-                if (#result.digits > 0) then -- Don't add leading zeroes
-                    result.digits[#result.digits + 1] = 0
-                end
-            else
-                -- Find the maximum number of divisors that fit into the
-                -- dividend
-                factor = 0
-                while (bigint.compare(divisor, dividend, "<=")) do
-                    divisor = bigint.add(divisor, big2)
-                    factor = factor + 1
-                end
-
-                -- Append the factor to the result
-                if (factor == 10) then
-                    -- Fixes a weird bug that introduces a new bug if fixed by
-                    -- changing the comparison in the while loop to "<="
-                    result.digits[#result.digits] = 1
-                    result.digits[#result.digits + 1] = 0
-                else
-                    result.digits[#result.digits + 1] = factor
-                end
-
-                -- Subtract the divisor from the dividend to obtain the
-                -- remainder, which is the new dividend for the next loop
-                dividend = bigint.subtract(dividend,
-                                           bigint.subtract(divisor, big2))
-
-                -- Reset the divisor
-                divisor = big2:clone()
+        for i = 1, #big1.digits do
+            -- Fixes a negative zero bug
+            if (#dividend.digits ~= 0) and (bigint.compare(dividend, neg_zero, "==")) then
+                dividend = bigint.new()
+            end
+            
+            table.insert(dividend.digits, big1.digits[i])
+            
+            local factor = bigint.new(0)
+            while bigint.compare(dividend, big2, ">=") do
+                dividend = bigint.subtract(dividend, big2)
+                factor = bigint.add(factor, bigint.new(1))
             end
 
+            for i = 0, #factor.digits - 1 do
+                result.digits[#result.digits + 1 - i] = factor.digits[i + 1]
+            end
         end
 
-        -- The remainder of the final loop is returned as the function's
-        -- overall remainder
+        -- Remove leading zeros from result
+        while (result.digits[1] == 0) do
+            table.remove(result.digits, 1)
+        end
+
         return result, dividend
     end
 end
